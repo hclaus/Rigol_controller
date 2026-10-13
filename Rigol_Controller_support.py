@@ -9,6 +9,7 @@
 # touches this file, so all application logic lives here (plus the helper
 # modules it imports).
 
+import os
 from dataclasses import dataclass, field
 
 import tkinter as tk
@@ -21,9 +22,16 @@ import Rigol_Controller
 import gui_utils
 from rigol_psu import RigolPSU
 import psu_discovery
+from mock_psu import MockRigolPSU, find_mock_supplies
+from tooltip import Tooltip
 
 PANEL_GUTTER = 10
 STATUS_POLL_MS = 2000
+
+# Set RIGOL_MOCK=1 to drive the whole app (including the 2nd-panel
+# duplication) with two simulated supplies, no hardware or VISA backend
+# required. See test_gui_mock.bat.
+MOCK_MODE = os.environ.get('RIGOL_MOCK') == '1'
 
 root = None
 rm = None
@@ -60,6 +68,9 @@ def main(*args):
     _top1 = root
     _w1 = Rigol_Controller.Rigol_GUI(_top1)
 
+    if MOCK_MODE:
+        root.title(root.title() + ' — MOCK MODE (no hardware)')
+
     panel1 = _build_panel1(_w1)
     _bind_panel(panel1)
     panels.append(panel1)
@@ -71,13 +82,11 @@ def main(*args):
 def FindPS(*args):
     gui = _w1
     try:
-        resource_manager = _get_resource_manager()
-    except Exception as e:
-        messagebox.showerror('VISA Error', f'Could not initialize VISA: {e}')
-        return
-
-    try:
-        found = psu_discovery.find_rigol_supplies(resource_manager)
+        if MOCK_MODE:
+            found = find_mock_supplies()
+        else:
+            resource_manager = _get_resource_manager()
+            found = psu_discovery.find_rigol_supplies(resource_manager)
     except Exception as e:
         messagebox.showerror('VISA Error', f'Error while searching for power supplies: {e}')
         return
@@ -108,11 +117,32 @@ def _get_resource_manager():
     return rm
 
 
+def _widen_combobox(gui, fraction=0.9):
+    '''The PAGE-designed combobox is too narrow to read a full IDN string -
+    widen it to `fraction` of Frame1's width, centered. Runs before
+    _build_panel2 ever clones Frame1, so panel 2's combobox inherits the
+    same width automatically.'''
+    frame_width = int(gui.Frame1.place_info()['width'])
+    combo_width = round(frame_width * fraction)
+    margin = (frame_width - combo_width) // 2
+    gui.TC1_PSChoice.place(x=margin, width=combo_width)
+
+
 def _build_panel1(gui):
     '''Populate the two empty channel frames from the fully-designed
     FrChan1, then wrap panel 1's widgets in a PSUPanel.'''
+    _widen_combobox(gui)
+
     map_ch2 = gui_utils.clone_widget_tree(gui.FrChan1, gui.FrChan2)
     map_ch3 = gui_utils.clone_widget_tree(gui.FrChan1, gui.FrChan3)
+
+    # Label3 is the "Output Settings" title already sitting in each channel
+    # frame - retext it per channel instead of adding a new widget. Panel 2
+    # inherits this correctly too: _build_panel2 clones these frames as-is,
+    # carrying the already-set "Channel N" text along with them.
+    gui.Label3.configure(text='Channel 1')
+    map_ch2[gui.Label3].configure(text='Channel 2')
+    map_ch3[gui.Label3].configure(text='Channel 3')
 
     channels = [
         ChannelWidgets(1, gui.Entry1, gui.Entry2, gui.Button1),
@@ -172,6 +202,7 @@ def _build_panel2(gui, panel1):
 
 def _bind_panel(panel):
     panel.combobox.bind('<<ComboboxSelected>>', lambda event, p=panel: _on_resource_selected(p))
+    Tooltip(panel.combobox, panel.combobox_var.get)
     for ch in panel.channels:
         ch.toggle_button.configure(command=lambda p=panel, c=ch: _toggle_channel(p, c))
 
@@ -186,7 +217,8 @@ def _on_resource_selected(panel):
         panel.psu.close()
         panel.psu = None
 
-    psu = RigolPSU(rm, match)
+    psu_cls = MockRigolPSU if MOCK_MODE else RigolPSU
+    psu = psu_cls(rm, match)
     try:
         psu.connect()
     except Exception as e:
