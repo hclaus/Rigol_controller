@@ -16,6 +16,8 @@ A Python/Tkinter GUI to control up to two Rigol bench power supplies (3 channels
 
 ## Installation
 
+Open a command prompt in the project folder: in Windows Explorer, navigate into Rigol_controller folder, type `cmd` into the address bar, and press Enter. A command window will open. Run (copy/paste) the following commands in the cmd window:
+
 1. Create and activate a virtual environment in the project folder:
    ```
    python -m venv .venv
