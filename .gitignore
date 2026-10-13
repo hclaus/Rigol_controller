@@ -1,0 +1,5 @@
+*.tmp
+\#*.tcl#*
+.venv/
+__pycache__/
+*.pyc
