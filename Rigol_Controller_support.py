@@ -14,12 +14,13 @@ from dataclasses import dataclass, field
 
 import tkinter as tk
 import tkinter.ttk as ttk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 
 import pyvisa
 
 import Rigol_Controller
 import gui_utils
+import config_store
 from rigol_psu import RigolPSU
 import psu_discovery
 from mock_psu import MockRigolPSU, find_mock_supplies
@@ -71,6 +72,9 @@ def main(*args):
     if MOCK_MODE:
         root.title(root.title() + ' — MOCK MODE (no hardware)')
 
+    _w1.menubar.add_command(label='Save Settings', compound='left', command=SaveSettings)
+    _w1.menubar.add_command(label='Load Settings', compound='left', command=LoadSettings)
+
     panel1 = _build_panel1(_w1)
     _bind_panel(panel1)
     panels.append(panel1)
@@ -104,6 +108,89 @@ def FindPS(*args):
     for panel in panels:
         panel.resources = found
         panel.combobox.configure(values=labels)
+
+
+def SaveSettings(*args):
+    '''Save every connected panel's current Voltage/Current entry values,
+    keyed by instrument IDN so they still apply after reconnecting to a
+    different USB port.'''
+    data = {}
+    saved_channels = 0
+    for panel in panels:
+        if panel.psu is None:
+            continue
+        for ch in panel.channels:
+            try:
+                voltage = float(ch.voltage_entry.get())
+                current = float(ch.current_entry.get())
+            except ValueError:
+                continue
+            config_store.set_channel_settings(data, panel.psu.idn, ch.channel_number, voltage, current)
+            saved_channels += 1
+
+    if saved_channels == 0:
+        messagebox.showinfo('Save Settings',
+                             'No connected power supply with valid Voltage/Current values to save.')
+        return
+
+    path = filedialog.asksaveasfilename(
+        title='Save Power Supply Settings',
+        defaultextension='.json',
+        initialfile='psu_settings.json',
+        filetypes=[('JSON files', '*.json'), ('All files', '*.*')],
+    )
+    if not path:
+        return
+
+    try:
+        config_store.save(path, data)
+    except Exception as e:
+        messagebox.showerror('Save Settings', f'Could not save settings: {e}')
+        return
+
+    messagebox.showinfo('Save Settings', f'Saved {saved_channels} channel setting(s) to:\n{path}')
+
+
+def LoadSettings(*args):
+    '''Load Voltage/Current values into the entry boxes of any panel whose
+    connected supply's IDN matches an entry in the file. Does not write
+    anything to the instrument - click a channel's button to apply and
+    turn it on, same as always.'''
+    path = filedialog.askopenfilename(
+        title='Load Power Supply Settings',
+        filetypes=[('JSON files', '*.json'), ('All files', '*.*')],
+    )
+    if not path:
+        return
+
+    try:
+        data = config_store.load(path)
+    except Exception as e:
+        messagebox.showerror('Load Settings', f'Could not load settings: {e}')
+        return
+
+    loaded_channels = 0
+    for panel in panels:
+        if panel.psu is None:
+            continue
+        for ch in panel.channels:
+            settings = config_store.get_channel_settings(data, panel.psu.idn, ch.channel_number)
+            if settings is None:
+                continue
+            ch.voltage_entry.delete(0, tk.END)
+            ch.voltage_entry.insert(0, str(settings['voltage']))
+            ch.current_entry.delete(0, tk.END)
+            ch.current_entry.insert(0, str(settings['current']))
+            loaded_channels += 1
+
+    if loaded_channels == 0:
+        messagebox.showinfo('Load Settings',
+                             'No saved settings matched a currently connected supply.\n'
+                             'Select a supply in each panel first, then load again.')
+    else:
+        messagebox.showinfo('Load Settings',
+                             f'Loaded {loaded_channels} channel setting(s) into the entry boxes.\n'
+                             'Click each channel\'s button to apply and turn it on.')
 
 
 def _resource_label(resource_name, idn):
